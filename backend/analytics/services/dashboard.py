@@ -8,6 +8,7 @@ from django.db import connection
 SCAN_TABLE = os.getenv("WASTE_SCAN_TABLE", "scm_scans")
 COMPANY_ID = int(os.getenv("WASTE_COMPANY_ID", "312"))
 WEIGHT_MULTIPLIER = float(os.getenv("WASTE_WEIGHT_MULTIPLIER", "100"))
+CO2_FACTOR_PER_KG = float(os.getenv("WASTE_CO2_FACTOR_PER_KG", "1.75"))
 ABNORMAL_MULTIPLIER = float(os.getenv("WASTE_ABNORMAL_MULTIPLIER", "1.2"))
 FIXED_DEVICE_SERIAL = os.getenv("WASTE_FIXED_DEVICE_SERIAL", "AGFW26009")
 
@@ -34,16 +35,7 @@ def _meal_expr() -> str:
 
 
 def _waste_type_expr() -> str:
-    raw_waste_type = _json_value_expr("$.scan_data.food_waste_type")
-    return (
-        "CASE "
-        f"WHEN {raw_waste_type} = 'Plate Waste' THEN 'Plate Waste' "
-        f"WHEN {raw_waste_type} IN ('Production Waste', 'Bain Marie Waste') THEN 'Production Waste' "
-        f"WHEN {raw_waste_type} = 'Peel Waste' THEN 'Preparation Waste' "
-        f"WHEN {raw_waste_type} = 'Spoiled Waste' THEN 'Spoilage' "
-        f"WHEN {raw_waste_type} IN ('Donation', 'Repurpose') THEN 'Other' "
-        f"ELSE {raw_waste_type} END"
-    )
+    return _json_value_expr("$.scan_data.food_waste_type")
 
 
 def _amount_expr() -> str:
@@ -130,7 +122,7 @@ def get_dashboard_summary(filters: FilterParams) -> dict:
     summary_sql = f"""
         SELECT
             ROUND(COALESCE(SUM({_weight_expr()}), 0), 3) AS total_waste,
-            ROUND(COALESCE(SUM({_weight_expr()}), 0) * 39.5, 3) AS co2_impact
+            ROUND(COALESCE(SUM({_weight_expr()}), 0) * {CO2_FACTOR_PER_KG}, 3) AS co2_impact
         FROM {_table()}
         {waste_where_sql}
     """
@@ -451,6 +443,11 @@ def get_weekday_comparison_grid(filters: FilterParams, weeks: list[str]) -> dict
     return {"weeks": ordered_weeks, "rows": grid_rows}
 
 
+DEVICE_DISPLAY_NAMES: dict[str, str] = {
+    "AGFW26009": "APOLLO INDIA SERVICES (Mumbai)",
+}
+
+
 def get_top_devices(filters: FilterParams, limit: int = 5) -> list[dict]:
     where_sql, params = _where_clause(filters)
     safe_limit = max(1, min(limit, 20))
@@ -466,20 +463,29 @@ def get_top_devices(filters: FilterParams, limit: int = 5) -> list[dict]:
         ORDER BY value DESC, name ASC
         LIMIT %s
     """
-    return _fetch_all(sql, [*params, safe_limit])
+    rows = _fetch_all(sql, [*params, safe_limit])
+    return [
+        {"name": DEVICE_DISPLAY_NAMES.get(row["name"], row["name"]), "value": row["value"]}
+        for row in rows
+    ]
 
 
 def get_filter_options() -> dict:
+    # Use company-wide base (no device restriction) so all waste types are visible
     base_where = "WHERE company_id = %s AND created_on_date IS NOT NULL"
     base_params: list = [COMPANY_ID]
+
+    # Device-restricted base for devices/meals/categories/weeks that belong to this site
+    site_where = base_where
+    site_params: list = list(base_params)
     if FIXED_DEVICE_SERIAL:
-        base_where += " AND device_serial_no = %s"
-        base_params.append(FIXED_DEVICE_SERIAL)
+        site_where += " AND device_serial_no = %s"
+        site_params.append(FIXED_DEVICE_SERIAL)
 
     devices_sql = f"""
         SELECT DISTINCT device_serial_no AS value
         FROM {_table()}
-        {base_where}
+        {site_where}
           AND device_serial_no IS NOT NULL
           AND device_serial_no <> ''
         ORDER BY value ASC
@@ -487,34 +493,45 @@ def get_filter_options() -> dict:
     meals_sql = f"""
         SELECT DISTINCT {_meal_expr()} AS value
         FROM {_table()}
-        {base_where}
+        {site_where}
           AND {_meal_expr()} IS NOT NULL
         ORDER BY value ASC
     """
     categories_sql = f"""
         SELECT DISTINCT commodity_name AS value
         FROM {_table()}
-        {base_where}
+        {site_where}
           AND commodity_name IS NOT NULL
           AND commodity_name <> ''
+        ORDER BY value ASC
+    """
+    # Fetch waste types from full company data so no valid type is hidden
+    waste_types_sql = f"""
+        SELECT DISTINCT {_waste_type_expr()} AS value
+        FROM {_table()}
+        {base_where}
+          AND {_waste_type_expr()} IS NOT NULL
+          AND {_waste_type_expr()} <> ''
         ORDER BY value ASC
     """
     range_sql = f"""
         SELECT MIN(created_on_date) AS min_date, MAX(created_on_date) AS max_date
         FROM {_table()}
-        {base_where}
+        {site_where}
     """
 
-    devices = [row["value"] for row in _fetch_all(devices_sql, base_params)]
-    meals = [row["value"] for row in _fetch_all(meals_sql, base_params)]
-    categories = [row["value"] for row in _fetch_all(categories_sql, base_params)]
-    date_range = _fetch_one(range_sql, base_params)
+    devices = [row["value"] for row in _fetch_all(devices_sql, site_params)]
+    meals = [row["value"] for row in _fetch_all(meals_sql, site_params)]
+    categories = [row["value"] for row in _fetch_all(categories_sql, site_params)]
+    waste_types = [row["value"] for row in _fetch_all(waste_types_sql, base_params)]
+    date_range = _fetch_one(range_sql, site_params)
     weeks = get_weekly_waste(FilterParams(devices=((FIXED_DEVICE_SERIAL,) if FIXED_DEVICE_SERIAL else ())))
 
     return {
         "devices": devices,
         "meal_types": meals,
         "categories": categories,
+        "waste_types": waste_types,
         "weeks": [
             {
                 "label": week["week"],
@@ -647,3 +664,144 @@ def get_chat_context(filters: FilterParams) -> dict:
         "weekday_waste": get_waste_by_weekday(filters),
         "insights": get_dashboard_insights(filters),
     }
+
+
+def get_usage_analytics(filters: FilterParams) -> dict:
+    count_where_sql, count_params = _where_clause(
+        filters,
+        require_commodity=False,
+        require_created_on_date=False,
+    )
+    count_sql = f"""
+        SELECT
+            COUNT(*) AS total_scans,
+            COUNT(DISTINCT created_on_date) AS active_days,
+            COUNT(DISTINCT CASE WHEN device_serial_no IS NOT NULL AND device_serial_no <> '' THEN device_serial_no END) AS total_devices
+        FROM {_table()}
+        {count_where_sql}
+    """
+    counts = _fetch_one(count_sql, count_params)
+    total_scans = int(counts.get("total_scans") or 0)
+    active_days = int(counts.get("active_days") or 0)
+    scans_per_day = round(total_scans / active_days) if active_days else 0
+
+    scans_by_meal_sql = f"""
+        SELECT
+            {_meal_expr()} AS name,
+            COUNT(*) AS value
+        FROM {_table()}
+        {count_where_sql}
+          AND {_meal_expr()} IS NOT NULL
+        GROUP BY {_meal_expr()}
+        ORDER BY value DESC, name ASC
+    """
+    scans_by_meal = _fetch_all(scans_by_meal_sql, count_params)
+
+    scans_by_waste_type_sql = f"""
+        SELECT
+            {_waste_type_expr()} AS name,
+            COUNT(*) AS value
+        FROM {_table()}
+        {count_where_sql}
+          AND {_waste_type_expr()} IS NOT NULL
+        GROUP BY {_waste_type_expr()}
+        ORDER BY value DESC, name ASC
+    """
+    scans_by_waste_type = _fetch_all(scans_by_waste_type_sql, count_params)
+
+    return {
+        "total_scans": total_scans,
+        "active_days": active_days,
+        "scans_per_day": scans_per_day,
+        "total_devices": int(counts.get("total_devices") or 0),
+        "scans_by_meal": [{"name": row["name"], "value": int(row["value"])} for row in scans_by_meal],
+        "scans_by_waste_type": [{"name": row["name"], "value": int(row["value"])} for row in scans_by_waste_type],
+    }
+
+
+BAIN_MARIE_WASTE_TYPE = "Bain Marie Waste"
+
+
+def get_bain_marie_analytics(filters: FilterParams) -> dict:
+    from dataclasses import replace as dc_replace
+    bm_filters = dc_replace(filters, waste_types=(BAIN_MARIE_WASTE_TYPE,))
+    where_sql, params = _where_clause(bm_filters)
+
+    summary_sql = f"""
+        SELECT
+            ROUND(COALESCE(SUM({_weight_expr()}), 0), 3) AS total_waste,
+            COUNT(DISTINCT created_on_date) AS active_days
+        FROM {_table()}
+        {where_sql}
+    """
+    summary = _fetch_one(summary_sql, params)
+    total_waste = float(summary.get("total_waste") or 0)
+    active_days = int(summary.get("active_days") or 0)
+
+    top_foods_sql = f"""
+        SELECT
+            commodity_name AS name,
+            ROUND(COALESCE(SUM({_weight_expr()}), 0), 3) AS value
+        FROM {_table()}
+        {where_sql}
+        GROUP BY commodity_name
+        ORDER BY value DESC, name ASC
+        LIMIT 10
+    """
+    top_foods = _fetch_all(top_foods_sql, params)
+
+    by_meal_sql = f"""
+        SELECT
+            {_meal_expr()} AS name,
+            ROUND(COALESCE(SUM({_weight_expr()}), 0), 3) AS value
+        FROM {_table()}
+        {where_sql}
+          AND {_meal_expr()} IS NOT NULL
+        GROUP BY {_meal_expr()}
+        ORDER BY value DESC, name ASC
+    """
+    by_meal = _fetch_all(by_meal_sql, params)
+
+    trend_sql = f"""
+        SELECT
+            created_on_date AS date,
+            ROUND(COALESCE(SUM({_weight_expr()}), 0), 3) AS value
+        FROM {_table()}
+        {where_sql}
+        GROUP BY created_on_date
+        ORDER BY created_on_date ASC
+    """
+    trend = _fetch_all(trend_sql, params)
+
+    return {
+        "total_waste": total_waste,
+        "daily_average": round(total_waste / active_days, 3) if active_days else 0,
+        "active_days": active_days,
+        "top_foods": [{"name": row["name"], "value": float(row["value"])} for row in top_foods],
+        "by_meal": [{"name": row["name"], "value": float(row["value"])} for row in by_meal],
+        "trend": [{"date": row["date"].isoformat(), "value": float(row["value"])} for row in trend],
+    }
+
+
+def get_daily_avg_by_category(filters: FilterParams) -> list[dict]:
+    where_sql, params = _where_clause(filters)
+    sql = f"""
+        SELECT
+            {_waste_type_expr()} AS name,
+            COUNT(DISTINCT created_on_date) AS active_days,
+            ROUND(COALESCE(SUM({_weight_expr()}), 0), 3) AS total_waste
+        FROM {_table()}
+        {where_sql}
+          AND {_waste_type_expr()} IS NOT NULL
+          AND {_waste_type_expr()} <> ''
+        GROUP BY {_waste_type_expr()}
+        ORDER BY total_waste DESC, name ASC
+    """
+    rows = _fetch_all(sql, params)
+    return [
+        {
+            "name": row["name"],
+            "value": round(float(row["total_waste"] or 0) / int(row["active_days"]), 3) if int(row["active_days"] or 0) else 0,
+        }
+        for row in rows
+    ]

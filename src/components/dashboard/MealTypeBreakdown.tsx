@@ -4,19 +4,17 @@ import { useQuery } from "@tanstack/react-query";
 import { dashboardApi, type DashboardFilters } from "@/lib/dashboard";
 
 
-const WASTE_TYPE_OPTIONS = ["Plate Waste", "Production Waste", "Preparation Waste", "Spoilage", "Other"];
-
-
 interface MealTypeBreakdownProps {
   filters: DashboardFilters;
+  wasteTypes: string[];
 }
 
 
-export default function MealTypeBreakdown({ filters }: MealTypeBreakdownProps) {
-  const [selectedWasteType, setSelectedWasteType] = useState("Plate Waste");
+export default function MealTypeBreakdown({ filters, wasteTypes }: MealTypeBreakdownProps) {
+  const [selectedWasteType, setSelectedWasteType] = useState("");
   const { data = [] } = useQuery({
     queryKey: ["meal-type-breakdown", filters, selectedWasteType],
-    queryFn: () => dashboardApi.getMealBreakdown(filters, [selectedWasteType]),
+    queryFn: () => dashboardApi.getMealBreakdown(filters, selectedWasteType ? [selectedWasteType] : []),
   });
 
   const total = data.reduce((sum, item) => sum + item.value, 0) || 1;
@@ -39,7 +37,8 @@ export default function MealTypeBreakdown({ filters }: MealTypeBreakdownProps) {
           onChange={(event) => setSelectedWasteType(event.target.value)}
           className="text-sm border border-border rounded px-2 py-1 bg-card text-foreground"
         >
-          {WASTE_TYPE_OPTIONS.map((option) => (
+          <option value="">All Waste Types</option>
+          {wasteTypes.map((option) => (
             <option key={option} value={option}>
               {option}
             </option>

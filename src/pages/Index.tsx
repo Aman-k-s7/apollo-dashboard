@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 
 import AlertsAnomalies from "@/components/dashboard/AlertsAnomalies";
+import BainMarieAnalytics from "@/components/dashboard/BainMarieAnalytics";
 import ChatBar from "@/components/dashboard/ChatBar";
 import CoreAnalysis from "@/components/dashboard/CoreAnalysis";
-import { DEFAULT_DASHBOARD_DEVICES } from "@/config/dashboard";
 import CostImpact from "@/components/dashboard/CostImpact";
+import DailyAvgByCategory from "@/components/dashboard/DailyAvgByCategory";
+import { DEFAULT_DASHBOARD_DEVICES } from "@/config/dashboard";
 import FilterSidebar from "@/components/dashboard/FilterSidebar";
 import FinalInsights from "@/components/dashboard/FinalInsights";
 import KpiStrip from "@/components/dashboard/KpiStrip";
 import PatternDetection from "@/components/dashboard/PatternDetection";
 import TimeAnalysis from "@/components/dashboard/TimeAnalysis";
 import TrendAnalysis from "@/components/dashboard/TrendAnalysis";
-import { useDashboardData, useDashboardFilterOptions } from "@/hooks/use-dashboard-data";
+import UsageAnalytics from "@/components/dashboard/UsageAnalytics";
+import { useDashboardData, useDashboardFilterOptions, useBainMarieAnalytics, useDailyAvgByCategory, useUsageAnalytics } from "@/hooks/use-dashboard-data";
 import type { DashboardFilters } from "@/lib/dashboard";
 
 
@@ -23,6 +26,7 @@ export default function Index() {
     mealTypes: [],
     categories: [],
     weeks: [],
+    wasteTypes: [],
   });
 
   useEffect(() => {
@@ -32,11 +36,15 @@ export default function Index() {
       mealTypes: [],
       categories: [],
       weeks: [],
+      wasteTypes: [],
     });
   }, [filterOptions]);
 
   const filters = useMemo(() => appliedFilters, [appliedFilters]);
   const dashboard = useDashboardData(filters);
+  const { data: usageData } = useUsageAnalytics(filters);
+  const { data: bainMarieData } = useBainMarieAnalytics(filters);
+  const { data: dailyAvgData } = useDailyAvgByCategory(filters);
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -49,15 +57,25 @@ export default function Index() {
               <h1 className="text-xl font-bold text-foreground">Waste Analysis</h1>
               <p className="text-sm text-muted-foreground mt-0.5">Real-time food waste intelligence dashboard</p>
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="inline-block w-2 h-2 rounded-full bg-primary animate-pulse" />
-              Waste Analysis
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => window.print()}
+                className="no-print inline-flex items-center gap-1.5 rounded border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
+              >
+                Download PDF
+              </button>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="inline-block w-2 h-2 rounded-full bg-primary animate-pulse" />
+                Waste Analysis
+              </div>
             </div>
           </div>
         </div>
 
         <div className="px-8 py-6 space-y-6">
-          <ChatBar filters={filters} />
+          <div className="no-print">
+            <ChatBar filters={filters} />
+          </div>
 
           {dashboard.isError ? (
             <div className="rounded border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
@@ -72,6 +90,7 @@ export default function Index() {
             foodItems={dashboard.foodItems}
             wasteCategories={dashboard.wasteCategories}
             topDevices={dashboard.topDevices}
+            wasteTypes={filterOptions?.waste_types ?? []}
           />
 
           <TrendAnalysis trend={dashboard.trend} />
@@ -79,6 +98,12 @@ export default function Index() {
           <TimeAnalysis filters={filters} options={filterOptions} />
 
           <AlertsAnomalies foodItems={dashboard.foodItems} wasteCategories={dashboard.wasteCategories} anomalies={dashboard.anomalies} />
+
+          <UsageAnalytics data={usageData} />
+
+          <BainMarieAnalytics data={bainMarieData} />
+
+          <DailyAvgByCategory data={dailyAvgData ?? []} />
 
           <PatternDetection insights={dashboard.insights} />
 

@@ -12,10 +12,11 @@ interface CoreAnalysisProps {
   foodItems: NamedValue[];
   wasteCategories: NamedValue[];
   topDevices: NamedValue[];
+  wasteTypes: string[];
 }
 
 
-export default function CoreAnalysis({ filters, foodItems, wasteCategories, topDevices }: CoreAnalysisProps) {
+export default function CoreAnalysis({ filters, foodItems, wasteCategories, topDevices, wasteTypes }: CoreAnalysisProps) {
   const topFoodItems = foodItems.slice(0, 7);
 
   return (
@@ -38,10 +39,10 @@ export default function CoreAnalysis({ filters, foodItems, wasteCategories, topD
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        <MealTypeBreakdown filters={filters} />
+        <MealTypeBreakdown filters={filters} wasteTypes={wasteTypes} />
 
         <div className="chart-card">
-          <h3 className="section-title">Waste Produced per Device</h3>
+          <h3 className="section-title">Waste Produced per Site</h3>
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={topDevices} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 100 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,13%,90%)" />

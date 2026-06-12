@@ -44,3 +44,27 @@ export function useDashboardData(filters: DashboardFilters) {
     error: (results.find((result) => result.error)?.error as Error | undefined) ?? undefined,
   };
 }
+
+
+export function useUsageAnalytics(filters: DashboardFilters) {
+  return useQuery({
+    queryKey: ["usage-analytics", filters],
+    queryFn: () => dashboardApi.getUsageAnalytics(filters),
+  });
+}
+
+
+export function useBainMarieAnalytics(filters: DashboardFilters) {
+  return useQuery({
+    queryKey: ["bain-marie-analytics", filters],
+    queryFn: () => dashboardApi.getBainMarieAnalytics(filters),
+  });
+}
+
+
+export function useDailyAvgByCategory(filters: DashboardFilters) {
+  return useQuery({
+    queryKey: ["daily-avg-by-category", filters],
+    queryFn: () => dashboardApi.getDailyAvgByCategory(filters),
+  });
+}
